@@ -882,11 +882,13 @@ export class LocalWeChatChannelApi {
       );
     }
     const token = readWeChatWebhookToken(body);
-    if (record.webhookToken && token !== record.webhookToken) {
+    if (!wechatWebhookAuthorized(record.webhookToken, token)) {
       return json(
         {
           ok: false,
-          error: 'WeChat webhook token mismatch',
+          error: record.webhookToken?.trim()
+            ? 'WeChat webhook token mismatch'
+            : 'WeChat webhook token is not configured',
           code: 'WECHAT_VERIFICATION_FAILED',
           platform: 'wechat',
           clientId: record.clientId,
@@ -897,6 +899,19 @@ export class LocalWeChatChannelApi {
     }
     return undefined;
   }
+}
+
+/**
+ * Webhook authentication is fail-closed. A usable bot binding that never
+ * stored `webhookToken` (the QR onboard path) must not accept inbound events.
+ */
+export function wechatWebhookAuthorized(
+  configuredToken: string | undefined,
+  presentedToken: string | undefined,
+): boolean {
+  const expected = configuredToken?.trim();
+  if (!expected) return false;
+  return presentedToken === expected;
 }
 
 /**
