@@ -524,7 +524,11 @@ export class PluginPackageStorage {
     ) {
       throw new PluginSystemError('LOCAL_IMPORT_UNSAFE', 'staged Plugin root is unsafe');
     }
-    const target = path.join(canonicalPluginsRoot, pluginName);
+    const directoryName = localPluginDirectoryName(pluginName);
+    const target = path.resolve(canonicalPluginsRoot, directoryName);
+    if (!isWithin(canonicalPluginsRoot, target)) {
+      throw new PluginSystemError('LOCAL_IMPORT_UNSAFE', 'plugin target escapes the plugins root');
+    }
     try {
       await lstat(target);
       throw new PluginSystemError('PLUGIN_ALREADY_EXISTS', 'local Plugin directory already exists');
@@ -982,6 +986,26 @@ async function makeTreeReadOnly(root: string): Promise<void> {
     }),
   );
   await chmod(root, 0o555);
+}
+
+/** A plugin directory name is one path segment. `../` must not leave the plugins root. */
+export function localPluginDirectoryName(pluginName: string): string {
+  const name = pluginName.trim();
+  if (
+    !name ||
+    name === '.' ||
+    name === '..' ||
+    name.includes('\0') ||
+    name.includes('/') ||
+    name.includes('\\') ||
+    name !== path.basename(name)
+  ) {
+    throw new PluginSystemError(
+      'LOCAL_IMPORT_UNSAFE',
+      'plugin name is not a single directory name',
+    );
+  }
+  return name;
 }
 
 function isWithin(root: string, candidate: string): boolean {
