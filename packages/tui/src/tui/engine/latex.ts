@@ -794,18 +794,28 @@ function renderLayout(source: string, nodes: readonly LayoutNode[]): Layout {
 	};
 }
 
+/** Nested groups and nested parsers share this ceiling. Deeper input is unsupported. */
+const MAX_LATEX_PARSE_DEPTH = 64;
+
 class LatexParser {
 	private readonly source: string;
 	private readonly layoutNodes: LayoutNode[];
 	private readonly display: boolean;
+	private readonly parseBudget: { depth: number };
 	private position = 0;
 	private supported = true;
 	private stackFractions = true;
 
-	constructor(source: string, layoutNodes: LayoutNode[], display: boolean) {
+	constructor(
+		source: string,
+		layoutNodes: LayoutNode[],
+		display: boolean,
+		parseBudget?: { depth: number },
+	) {
 		this.source = source;
 		this.layoutNodes = layoutNodes;
 		this.display = display;
+		this.parseBudget = parseBudget ?? { depth: 0 };
 	}
 
 	render(): string | undefined {
@@ -817,6 +827,19 @@ class LatexParser {
 	}
 
 	private parseSequence(endCharacter?: string): string {
+		if (this.parseBudget.depth >= MAX_LATEX_PARSE_DEPTH) {
+			this.supported = false;
+			return "";
+		}
+		this.parseBudget.depth += 1;
+		try {
+			return this.parseSequenceBody(endCharacter);
+		} finally {
+			this.parseBudget.depth -= 1;
+		}
+	}
+
+	private parseSequenceBody(endCharacter?: string): string {
 		let result = "";
 		while (this.position < this.source.length) {
 			const character = this.source[this.position];
@@ -1341,12 +1364,26 @@ class LatexParser {
 	}
 
 	private renderNested(source: string, stackFractions = true): string {
-		const rendered = new LatexParser(source, this.layoutNodes, this.display && stackFractions).render();
-		if (rendered === undefined) {
+		if (this.parseBudget.depth >= MAX_LATEX_PARSE_DEPTH) {
 			this.supported = false;
 			return source;
 		}
-		return rendered;
+		this.parseBudget.depth += 1;
+		try {
+			const rendered = new LatexParser(
+				source,
+				this.layoutNodes,
+				this.display && stackFractions,
+				this.parseBudget,
+			).render();
+			if (rendered === undefined) {
+				this.supported = false;
+				return source;
+			}
+			return rendered;
+		} finally {
+			this.parseBudget.depth -= 1;
+		}
 	}
 }
 
