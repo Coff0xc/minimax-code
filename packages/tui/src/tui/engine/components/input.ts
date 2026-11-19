@@ -7,6 +7,7 @@ import { getGraphemeSegmenter, isWhitespaceChar, sliceByColumn, visibleWidth } f
 import { findWordBackward, findWordForward } from "../word-navigation.js";
 
 const segmenter = getGraphemeSegmenter();
+const MAX_BRACKETED_PASTE_CHARS = 1_048_576;
 
 interface InputState {
 	value: string;
@@ -79,6 +80,12 @@ export class Input implements Component, Focusable {
 			this.pasteBuffer += data;
 
 			const endIndex = this.pasteBuffer.indexOf("\x1b[201~");
+			const contentLength = endIndex === -1 ? this.pasteBuffer.length : endIndex;
+			if (contentLength > MAX_BRACKETED_PASTE_CHARS) {
+				this.isInPaste = false;
+				this.pasteBuffer = "";
+				return;
+			}
 			if (endIndex !== -1) {
 				// Extract the pasted content
 				const pasteContent = this.pasteBuffer.substring(0, endIndex);

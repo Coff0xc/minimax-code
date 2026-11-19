@@ -17,6 +17,7 @@ import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from '
 
 const graphemeSegmenter = getGraphemeSegmenter();
 const wordSegmenter = getWordSegmenter();
+const MAX_BRACKETED_PASTE_CHARS = 1_048_576;
 
 /** Regex matching paste markers like `[paste #1 +123 lines]` or `[paste #2 1234 chars]`. */
 const PASTE_MARKER_REGEX = /\[paste #(\d+)( (\+\d+ lines|\d+ chars))?\]/g;
@@ -762,6 +763,12 @@ export class Editor implements Component, Focusable {
     if (this.isInPaste) {
       this.pasteBuffer += data;
       const endIndex = this.pasteBuffer.indexOf('\x1b[201~');
+      const contentLength = endIndex === -1 ? this.pasteBuffer.length : endIndex;
+      if (contentLength > MAX_BRACKETED_PASTE_CHARS) {
+        this.isInPaste = false;
+        this.pasteBuffer = '';
+        return;
+      }
       if (endIndex !== -1) {
         const pasteContent = this.pasteBuffer.substring(0, endIndex);
         if (pasteContent.length > 0) {

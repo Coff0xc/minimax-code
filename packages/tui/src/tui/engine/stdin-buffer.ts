@@ -24,6 +24,7 @@ const DEFAULT_SEQUENCE_TIMEOUT_MS = 50;
 const DEFAULT_ESCAPE_TIMEOUT_MS = 10;
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
+const MAX_BRACKETED_PASTE_CHARS = 1_048_576;
 
 /**
  * Check if a string is a complete escape sequence or needs more data
@@ -330,7 +331,9 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			/[\r\n][^\r\n]/.test(str)
 		) {
 			this.pendingKittyPrintableCodepoint = undefined;
-			this.emit("paste", str);
+			if (str.length <= MAX_BRACKETED_PASTE_CHARS) {
+				this.emit("paste", str);
+			}
 			return;
 		}
 
@@ -339,22 +342,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		if (this.pasteMode) {
 			this.pasteBuffer += this.buffer;
 			this.buffer = "";
-
-			const endIndex = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
-			if (endIndex !== -1) {
-				const pastedContent = this.pasteBuffer.slice(0, endIndex);
-				const remaining = this.pasteBuffer.slice(endIndex + BRACKETED_PASTE_END.length);
-
-				this.pasteMode = false;
-				this.pasteBuffer = "";
-				this.pendingKittyPrintableCodepoint = undefined;
-
-				this.emit("paste", pastedContent);
-
-				if (remaining.length > 0) {
-					this.process(remaining);
-				}
-			}
+			this.takePaste();
 			return;
 		}
 
@@ -373,22 +361,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			this.pasteMode = true;
 			this.pasteBuffer = this.buffer;
 			this.buffer = "";
-
-			const endIndex = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
-			if (endIndex !== -1) {
-				const pastedContent = this.pasteBuffer.slice(0, endIndex);
-				const remaining = this.pasteBuffer.slice(endIndex + BRACKETED_PASTE_END.length);
-
-				this.pasteMode = false;
-				this.pasteBuffer = "";
-				this.pendingKittyPrintableCodepoint = undefined;
-
-				this.emit("paste", pastedContent);
-
-				if (remaining.length > 0) {
-					this.process(remaining);
-				}
-			}
+			this.takePaste();
 			return;
 		}
 
@@ -414,6 +387,32 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 					}
 				}, 1);
 			}, Math.max(0, timeoutMs - 1));
+		}
+	}
+
+	/** Finish a bracketed paste, or drop it once the payload exceeds the cap. */
+	private takePaste(): void {
+		const endIndex = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
+		const contentLength = endIndex === -1 ? this.pasteBuffer.length : endIndex;
+		if (contentLength > MAX_BRACKETED_PASTE_CHARS) {
+			this.pasteMode = false;
+			this.pasteBuffer = "";
+			this.buffer = "";
+			this.pendingKittyPrintableCodepoint = undefined;
+			return;
+		}
+		if (endIndex === -1) {
+			return;
+		}
+
+		const pastedContent = this.pasteBuffer.slice(0, endIndex);
+		const remaining = this.pasteBuffer.slice(endIndex + BRACKETED_PASTE_END.length);
+		this.pasteMode = false;
+		this.pasteBuffer = "";
+		this.pendingKittyPrintableCodepoint = undefined;
+		this.emit("paste", pastedContent);
+		if (remaining.length > 0) {
+			this.process(remaining);
 		}
 	}
 

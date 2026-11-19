@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProcessTerminal, StdinBuffer } from '../../src/tui/engine/public.js';
+import { Input, ProcessTerminal, StdinBuffer } from '../../src/tui/engine/public.js';
 import { Editor } from '../../src/tui/widgets/editor/editor.js';
 
 const startPaste = '\x1b[200~';
@@ -143,5 +143,47 @@ describe('terminal text paste', () => {
       buffer.destroy();
       vi.useRealTimers();
     }
+  });
+
+  it('drops an unterminated bracketed paste over the cap and accepts the next paste', () => {
+    const h = createHarness();
+    try {
+      h.send(`${startPaste}${'a'.repeat(1_048_577)}`);
+      h.send(`${startPaste}ok${endPaste}`);
+      expect(h.submitted).not.toHaveBeenCalled();
+      expect(h.editor.getExpandedText()).toBe('ok');
+    } finally { h.terminal.stop(); }
+  });
+});
+
+describe('bracketed paste cap', () => {
+  it('StdinBuffer abandons an oversized paste and emits the next key', () => {
+    const buffer = new StdinBuffer();
+    const paste = vi.fn();
+    const data = vi.fn();
+    buffer.on('paste', paste);
+    buffer.on('data', data);
+    try {
+      buffer.process(`${startPaste}${'a'.repeat(1_048_577)}${endPaste}x`);
+      buffer.process('y');
+      expect(paste).not.toHaveBeenCalled();
+      expect(data.mock.calls).toEqual([['y']]);
+    } finally { buffer.destroy(); }
+  });
+
+  it('Input abandons an oversized paste and inserts the next key', () => {
+    const input = new Input();
+    input.handleInput(`${startPaste}${'a'.repeat(1_048_577)}`);
+    input.handleInput('z');
+    expect(input.getValue()).toBe('z');
+  });
+
+  it('Editor abandons an oversized paste and inserts the next key', () => {
+    const h = createHarness();
+    try {
+      h.editor.handleInput(`${startPaste}${'a'.repeat(1_048_577)}${endPaste}`);
+      h.editor.handleInput('z');
+      expect(h.editor.getExpandedText()).toBe('z');
+    } finally { h.terminal.stop(); }
   });
 });
