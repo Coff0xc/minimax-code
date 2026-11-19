@@ -452,10 +452,99 @@ const POSIX_SHELL_NAMES: ReadonlySet<string> = new Set([
  * C:\..."` from a WSL cross-shell nest) survives the POSIX tokenizer's
  * escape-strip.
  */
+const POSIX_OPTIONS_WITH_VALUE = new Set(['-o', '--rcfile', '--init-file']);
+
+function peelOnePairOfQuotes(value: string): string {
+  let rest = value.trim();
+  if (rest.length >= 2) {
+    const first = rest[0];
+    const last = rest[rest.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      rest = rest.slice(1, -1).trim();
+    }
+  }
+  return rest;
+}
+
+function payloadFromToken(
+  cmd: string,
+  meta: { start: number; end: number } | undefined,
+): string | undefined {
+  if (!meta) return undefined;
+  const rest = peelOnePairOfQuotes(cmd.slice(meta.start, meta.end));
+  return rest || undefined;
+}
+
+/**
+ * POSIX `-c` is not always the token immediately after the shell name.
+ * `bash --norc -c`, `bash -o errexit -c`, and `bash -ec` are real invocations.
+ * A quote glued to the flag (`bash -c'rm -rf /'`) is one token.
+ */
+function extractPosixInlineCommand(
+  cmd: string,
+  shellTokens: { start: number; end: number }[],
+  tokens: string[],
+  start: number,
+): string | undefined {
+  let index = start;
+  while (index < tokens.length) {
+    const meta = shellTokens[index];
+    const tok = tokens[index] ?? '';
+    const raw = meta ? cmd.slice(meta.start, meta.end) : tok;
+    if (tok === '--') return undefined;
+    if (tok === '-c' || tok === '--command') return payloadFromToken(cmd, shellTokens[index + 1]);
+    const lowerRaw = raw.toLowerCase();
+    if (
+      (lowerRaw.startsWith('-c"') ||
+        lowerRaw.startsWith("-c'") ||
+        lowerRaw.startsWith('--command"') ||
+        lowerRaw.startsWith("--command'")) &&
+      raw.length > 3
+    ) {
+      const marker = lowerRaw.startsWith('--command') ? '--command'.length : 2;
+      const rest = peelOnePairOfQuotes(raw.slice(marker));
+      return rest || undefined;
+    }
+    if (/^-[0-9A-Za-z]*c$/u.test(tok)) return payloadFromToken(cmd, shellTokens[index + 1]);
+    if (POSIX_OPTIONS_WITH_VALUE.has(tok)) {
+      index += 2;
+      continue;
+    }
+    if (tok.startsWith('-')) {
+      index += 1;
+      continue;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/** `cmd /c"..."` keeps the payload on the flag token because the quote is not a separator. */
+function gluedCmdPayload(raw: string): string | undefined {
+  const lower = raw.toLowerCase();
+  for (const flag of ['/c', '/k'] as const) {
+    if (!(lower.startsWith(`${flag}"`) || lower.startsWith(`${flag}'`))) continue;
+    const rest = peelOnePairOfQuotes(raw.slice(flag.length));
+    return rest || undefined;
+  }
+  return undefined;
+}
+
+/** `powershell -c"..."` is the same glued-quote shape. */
+function gluedPowerShellPayload(raw: string): string | undefined {
+  const lower = raw.toLowerCase();
+  let marker = 0;
+  if (lower.startsWith('-command"') || lower.startsWith("-command'")) marker = '-command'.length;
+  else if (lower.startsWith('-c"') || lower.startsWith("-c'")) marker = 2;
+  else return undefined;
+  const rest = peelOnePairOfQuotes(raw.slice(marker));
+  return rest || undefined;
+}
+
 function pushBashCInner(cmd: string, candidates: string[]): void {
   const shellTokens = shellTokenizeWithMetadata(cmd);
   const tokens = shellTokens.map((t) => t.value);
-  if (tokens.length < 3) return;
+  if (tokens.length < 2) return;
 
   // Optional `sudo` prefix consumes 1 token. `sudo` itself carries flags
   // (`-u`, `-i`, `-H`, etc.) but callers usually invoke as bare `sudo
@@ -498,31 +587,8 @@ function pushBashCInner(cmd: string, candidates: string[]): void {
   } else {
     return;
   }
-  if (cFlagIdx >= tokens.length - 1) return;
-
-  // The `-c` flag itself, or an equivalent short/long form. POSIX shells
-  // accept just `-c`; `dash` and `busybox sh` also accept it.
-  if ((tokens[cFlagIdx] ?? '') !== '-c') return;
-
-  // Payload is the single next token (all POSIX `-c` shells take one
-  // string argument). Raw substring preserves any Windows-shape content
-  // an attacker might nest inside; outer quote peeling handles the
-  // typical `bash -c "..."` shape.
-  const payloadIdx = cFlagIdx + 1;
-  const payloadMeta = shellTokens[payloadIdx];
-  if (!payloadMeta) return;
-  let rest = cmd.slice(payloadMeta.start, payloadMeta.end).trim();
-  if (rest.length >= 2) {
-    const first = rest[0];
-    const last = rest[rest.length - 1];
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      rest = rest.slice(1, -1);
-    }
-  }
-  rest = rest.trim();
-  if (rest && !candidates.includes(rest)) {
-    candidates.push(rest);
-  }
+  const rest = extractPosixInlineCommand(cmd, shellTokens, tokens, cFlagIdx);
+  if (rest && !candidates.includes(rest)) candidates.push(rest);
 }
 
 /**
@@ -577,7 +643,7 @@ function pushWindowsShellInner(cmd: string, candidates: string[]): void {
   // (flags are `-`-prefixed ASCII, no backslashes to worry about).
   const shellTokens = shellTokenizeWithMetadata(cmd);
   const tokens = shellTokens.map((t) => t.value);
-  if (tokens.length < 3) return;
+  if (tokens.length < 2) return;
 
   const headMeta = shellTokens[0];
   const headRaw = headMeta ? cmd.slice(headMeta.start, headMeta.end) : (tokens[0] ?? '');
@@ -616,6 +682,13 @@ function pushWindowsShellInner(cmd: string, candidates: string[]): void {
   while (i < tokens.length) {
     const tok = tokens[i] ?? '';
     if (isCmdExe) {
+      const meta = shellTokens[i];
+      const raw = meta ? cmd.slice(meta.start, meta.end) : tok;
+      const glued = gluedCmdPayload(raw);
+      if (glued) {
+        if (glued && !candidates.includes(glued)) candidates.push(glued);
+        return;
+      }
       const tokLower = tok.toLowerCase();
       // `/c` and `/k` both run the inline command; `/s` and `/d` are
       // parsing/AutoRun modifiers that appear before `/c`. Any other
@@ -639,6 +712,13 @@ function pushWindowsShellInner(cmd: string, candidates: string[]): void {
     // `-enc` — kept in sync with the `-enc` / `-EncodedCommand` matcher
     // in dangerous-patterns.ts (windows-encoded-command category), so
     // both classifier and unwrap see the same shape. Case-insensitive.
+    const meta = shellTokens[i];
+    const raw = meta ? cmd.slice(meta.start, meta.end) : tok;
+    const glued = gluedPowerShellPayload(raw);
+    if (glued) {
+      if (!candidates.includes(glued)) candidates.push(glued);
+      return;
+    }
     const tokLower = tok.toLowerCase();
     if (tokLower === '-command' || tokLower === '-c') {
       commandFlag = 'plain';
