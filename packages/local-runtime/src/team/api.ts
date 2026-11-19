@@ -148,6 +148,14 @@ export async function routeLocalTeamApi(input: {
   if (!record) return json(planNotFoundBody(input.dataDir, planId), { status: 404 });
 
   if (input.method === 'GET' && tail.length === 2) {
+    const access = checkPlanAccess(
+      record,
+      await canonicalizeSessionId(
+        input.getSessionById,
+        readCallerSession(input.request, input.url),
+      ),
+    );
+    if (access) return access;
     return json({ state: record.state, plan: record.plan });
   }
 
@@ -571,6 +579,14 @@ async function routeLocalTeamTaskApi(input: {
   if (!result) return json({ error: `Task ${taskId} not found` }, { status: 404 });
 
   if (input.method === 'GET' && action === 'deliverable') {
+    const access = checkPlanAccess(
+      input.record,
+      await canonicalizeSessionId(
+        input.getSessionById,
+        readCallerSession(input.request, input.url),
+      ),
+    );
+    if (access) return access;
     const tasksDir = resolve(input.dataDir, 'plans', input.planId, 'tasks');
     const outputDir = containedPath(tasksDir, taskId);
     const file = resolve(outputDir, 'deliverable.md');
