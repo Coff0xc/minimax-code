@@ -173,23 +173,33 @@ export function wordWrapLine(
     }
 
     if (gWidth > maxWidth) {
-      // Single atomic segment wider than maxWidth (e.g. paste marker
-      // in a narrow terminal). Re-wrap it at grapheme granularity.
-
-      // The segment remains logically atomic for cursor
-      // movement / editing — the split is purely visual for word-wrap layout.
-      const subChunks = wordWrapLine(grapheme, maxWidth);
-      for (let j = 0; j < subChunks.length - 1; j++) {
-        const sc = subChunks[j]!;
-        chunks.push({
-          text: sc.text,
-          startIndex: charIndex + sc.startIndex,
-          endIndex: charIndex + sc.endIndex,
-        });
+      // Paste markers are one segment but many graphemes. Recurse only when
+      // splitting changes the segment count. A single wide grapheme (CJK or
+      // emoji on a 1-column terminal) would otherwise recurse forever.
+      const subSegments = [...graphemeSegmenter.segment(grapheme)];
+      if (subSegments.length > 1) {
+        // The segment remains logically atomic for cursor movement. The split
+        // is purely visual for word-wrap layout.
+        const subChunks = wordWrapLine(grapheme, maxWidth);
+        for (let j = 0; j < subChunks.length - 1; j++) {
+          const sc = subChunks[j]!;
+          chunks.push({
+            text: sc.text,
+            startIndex: charIndex + sc.startIndex,
+            endIndex: charIndex + sc.endIndex,
+          });
+        }
+        const last = subChunks[subChunks.length - 1]!;
+        chunkStart = charIndex + last.startIndex;
+        currentWidth = visibleWidth(last.text);
+        wrapOppIndex = -1;
+        continue;
       }
-      const last = subChunks[subChunks.length - 1]!;
-      chunkStart = charIndex + last.startIndex;
-      currentWidth = visibleWidth(last.text);
+
+      // Keep this grapheme as the open chunk. Clamp the running width so the
+      // next grapheme breaks before it, without adding a width that cannot fit.
+      chunkStart = charIndex;
+      currentWidth = maxWidth;
       wrapOppIndex = -1;
       continue;
     }
