@@ -153,7 +153,7 @@ async function handlePermissionAction(input: {
   );
   if (!pending) return json({ ok: true, ignored: true, reason: 'permission-not-pending' });
   const payloadChatId = nonEmptyPayloadChatId(input.payload.open_chat_id);
-  if (payloadChatId && payloadChatId !== pending.chatId) {
+  if (!payloadChatId || payloadChatId !== pending.chatId) {
     logger.warn(
       {
         requestId,
@@ -247,7 +247,7 @@ async function handleFormSubmit(input: {
   );
   if (!pending) return json({ ok: true, ignored: true, reason: 'questionnaire-not-pending' });
   const payloadChatId = nonEmptyPayloadChatId(input.payload.open_chat_id);
-  if (payloadChatId && payloadChatId !== pending.chatId) {
+  if (!payloadChatId || payloadChatId !== pending.chatId) {
     logger.warn(
       {
         requestId,
