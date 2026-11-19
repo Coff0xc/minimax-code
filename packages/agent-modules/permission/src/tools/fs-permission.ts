@@ -1000,6 +1000,32 @@ function criticalSafetyReason(target: string): DecisionReason | undefined {
 }
 
 /**
+ * Implicit workspace and sandbox allows are lexical. A symlink such as
+ * `notes.txt -> .env` or `notes.txt -> ../secret` must be judged by its
+ * real target, and that target must stay inside the same root.
+ */
+function escapedWorkspaceTarget(
+  resolved: string,
+  roots: readonly string[],
+): PathPermissionResult | undefined {
+  const canonical = resolveExistingPath(resolved);
+  const critical = criticalSafetyReason(canonical);
+  if (critical) return { allowed: false, reason: critical };
+  const inside = roots.some((root) => {
+    if (!root) return false;
+    return (
+      pathInWorkingPath(canonical, root) ||
+      pathInWorkingPath(canonical, resolveExistingPath(root))
+    );
+  });
+  if (inside) return undefined;
+  return {
+    allowed: false,
+    reason: { type: 'workingDirectory', path: canonical },
+  };
+}
+
+/**
  * Check if a file path operation is allowed.
  *
  * Step 1: Deny rule matching
@@ -1261,6 +1287,8 @@ export function isPathAllowed(
 
   // Step 4: Working directory boundary check
   if (pathInWorkingPath(resolved, context.workingDirectory)) {
+    const escaped = escapedWorkspaceTarget(resolved, [context.workingDirectory]);
+    if (escaped) return escaped;
     return {
       allowed: true,
       reason: { type: 'workingDirectory', path: resolved },
@@ -1271,6 +1299,8 @@ export function isPathAllowed(
     context.allowedWorkingPaths &&
     pathInAllowedWorkingPath(resolved, context.allowedWorkingPaths)
   ) {
+    const escaped = escapedWorkspaceTarget(resolved, context.allowedWorkingPaths);
+    if (escaped) return escaped;
     return {
       allowed: true,
       reason: { type: 'workingDirectory', path: resolved },
@@ -1279,6 +1309,8 @@ export function isPathAllowed(
 
   // Step 5: Sandbox allow list
   if (context.sandboxAllowPaths && pathInAllowedWorkingPath(resolved, context.sandboxAllowPaths)) {
+    const escaped = escapedWorkspaceTarget(resolved, context.sandboxAllowPaths);
+    if (escaped) return escaped;
     return {
       allowed: true,
       reason: { type: 'sandbox' },

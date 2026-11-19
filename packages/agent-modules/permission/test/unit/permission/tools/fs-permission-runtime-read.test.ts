@@ -426,3 +426,92 @@ describe('runtime-handed paths under the private data directory', () => {
     );
   });
 });
+
+const workspaceSymlinksAvailable = (() => {
+  const dir = fs.mkdtempSync(path.join(os.homedir(), '.minimax-perm-probe-'));
+  const target = path.join(dir, 'target.txt');
+  const link = path.join(dir, 'link.txt');
+  try {
+    fs.writeFileSync(target, 'x');
+    fs.symlinkSync(target, link, 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+describe('workspace symlink boundary', () => {
+  let rootDir = '';
+
+  afterEach(() => {
+    if (rootDir) fs.rmSync(rootDir, { recursive: true, force: true });
+    rootDir = '';
+  });
+
+  function linkFile(target: string, at: string): boolean {
+    try {
+      fs.symlinkSync(target, at, 'file');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function context(workspace: string): PathCheckContext {
+    return {
+      workingDirectory: workspace,
+      dataDir: path.join(rootDir, 'data'),
+      homeDir: path.join(rootDir, 'home'),
+    };
+  }
+
+  it.skipIf(!workspaceSymlinksAvailable)(
+    'does not auto-allow a workspace symlink that leaves the workspace',
+    () => {
+    rootDir = fs.mkdtempSync(path.join(os.homedir(), '.minimax-perm-workspace-'));
+    const workspace = path.join(rootDir, 'workspace');
+    const outside = path.join(rootDir, 'outside.txt');
+    fs.mkdirSync(workspace);
+    fs.writeFileSync(outside, 'secret\n');
+    const alias = path.join(workspace, 'notes.txt');
+    if (!linkFile(outside, alias)) return;
+
+    const result = isPathAllowed(alias, [], context(workspace), 'read');
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason.type).toBe('workingDirectory');
+  },
+  );
+
+  it.skipIf(!workspaceSymlinksAvailable)(
+    'does not auto-allow a workspace symlink to an env file',
+    () => {
+    rootDir = fs.mkdtempSync(path.join(os.homedir(), '.minimax-perm-workspace-'));
+    const workspace = path.join(rootDir, 'workspace');
+    const secret = path.join(rootDir, '.env');
+    fs.mkdirSync(workspace);
+    fs.writeFileSync(secret, 'TOKEN=1\n');
+    const alias = path.join(workspace, 'notes.txt');
+    if (!linkFile(secret, alias)) return;
+
+    const result = isPathAllowed(alias, [], context(workspace), 'read');
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason.type).toBe('safetyCheck');
+  });
+
+  it('still reads a regular file inside the workspace', () => {
+    rootDir = fs.mkdtempSync(path.join(os.homedir(), '.minimax-perm-workspace-'));
+    const workspace = path.join(rootDir, 'workspace');
+    const file = path.join(workspace, 'notes.txt');
+    fs.mkdirSync(workspace);
+    fs.writeFileSync(file, 'ok\n');
+
+    const result = isPathAllowed(file, [], context(workspace), 'read');
+
+    expect(result.allowed).toBe(true);
+    expect(result.reason.type).toBe('workingDirectory');
+  });
+});
