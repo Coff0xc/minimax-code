@@ -659,6 +659,7 @@ function readPendingUpdateFile(file: string): {
     process.platform,
   );
   if (
+    !isContainedMcodeStagingPrefix(pending.activePrefix, pending.stagingPrefix) ||
     path.resolve(pending.activePrefix) === path.resolve(pending.stagingPrefix) ||
     !sameResolvedPath(pending.activeModulesRoot, expectedActiveModulesRoot) ||
     !sameResolvedPath(pending.stagedModulesRoot, expectedStagedModulesRoot) ||
@@ -689,6 +690,28 @@ function readPendingUpdateFile(file: string): {
     throw new Error(`MCode pending update paths are invalid at ${file}.`);
   }
   return { contents, pending };
+}
+
+/**
+ * `stagingPrefix` is deleted recursively after activation. It must be the
+ * sibling directory `createMcodePrefixUpdateStagingPrefix` would create,
+ * not an arbitrary absolute path.
+ */
+export function isContainedMcodeStagingPrefix(
+  activePrefix: string,
+  stagingPrefix: string,
+): boolean {
+  const platformPath = platformPathFor(process.platform);
+  const active = platformPath.resolve(activePrefix);
+  const staging = platformPath.resolve(stagingPrefix);
+  if (platformPath.dirname(active) !== platformPath.dirname(staging) || active === staging) {
+    return false;
+  }
+  const expected = `.${platformPath.basename(active)}.update-`;
+  const name = platformPath.basename(staging);
+  if (!name.startsWith(expected)) return false;
+  const suffix = name.slice(expected.length);
+  return suffix.length > 0 && !suffix.includes('..') && !/[\\/]/u.test(suffix);
 }
 
 function isPathInside(root: string, candidate: string): boolean {
